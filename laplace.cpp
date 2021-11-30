@@ -31,8 +31,8 @@
 using namespace sycl;
 
 // Tamaño de la placa
-#define COLUMNS       675
-#define ROWS          675     
+#define COLUMNS       672
+#define ROWS          672     
 
 // Usar 10752 (16 veces más grande) para evaluación de rendimiento
 
@@ -164,62 +164,71 @@ void laplace_parallel(int &iteration, double &dt){
      * AGREGUE AQUÍ SU SOLUCIÓN
      */
     int i, j;
-    queue q;
+    
 
-    buffer temp_buf(reinterpret_cast <int *> (Temperature), range(ROWS+2,COLUMNS+2));
-    buffer temperature_buf(reinterpret_cast<int *>(Temperature_last),range(ROWS+2,COLUMNS+2));
-    buffer <double, 1> buffdt (&dt, 1);
 
     // Iterar hasta alcanzar un estado de estabilización o número máximo de iteraciones
     while ( dt > MAX_TEMP_ERROR && iteration <= MAX_ITERATIONS ) {
 
+        queue q;
+
+        buffer temp_buf(reinterpret_cast <double *> (Temperature), range(ROWS+2,COLUMNS+2));
+        buffer temperature_buf(reinterpret_cast<double *>(Temperature_last), range(ROWS+2,COLUMNS+2));
+        buffer <double, 1> buffdt (&dt, 1);
+
         // Cálculo principal:
         // Por cada posición de la matriz calcular el promedio de los vecinos
         q.submit([&](handler &h){
-            accessor temp_acc(temp_buf,h,write_only);
-            accessor temperature_acc(temperature_buf,h,read_only);
+            accessor temp_acc(temp_buf,h, write_only);
+            accessor temperature_acc(temperature_buf,h, read_only);
 
-            range<2> global(7,1);
+            range<2> global(12,1);
             range<2> local(1,1);
 
-            h.parallel_for(nd_range<2>(global,local),[=](nd_item<2>index){
+            h.parallel_for(nd_range<2>(global,local),[=](nd_item<2> index){
 
-                  int portion = ROWS/7;
+                  int portion = (ROWS)/12;
                   int start = index.get_global_id() [0] * portion;
                   int end = start + portion;
 
-                for(int i= start; i<end; i++){
-                    for(int j= 0; j<COLUMNS;j++){
+                for(int i= start; i<= end; i++){
+                    for(int j= 1; j <= COLUMNS;j++){
                         temp_acc[i][j] = 0.25 * (temperature_acc[i+1][j] + temperature_acc[i-1][j] + temperature_acc[i][j+1] + temperature_acc[i][j-1]);
                     }
                 }
             }); 
          });
-                dt = 0.0;
-        
-        q.submit([&](handler &h){
-            accessor temp_acc(temp_buf,h,read_only);
-            accessor temperature_acc(temperature_buf,h,write_only);
+         q.wait();
 
-            range<2> global(7,1);
+        dt = 0.0;
+
+       
+        q.submit([&](handler &h){
+            accessor temp_acc(temp_buf,h, read_only);
+            accessor temperature_acc(temperature_buf,h, write_only);
+
+            range<2> global(12,1);
             range<2> local(1,1);
 
             auto dtmax = reduction(buffdt, h, maximum<>());
 
             h.parallel_for(nd_range<2>({global,local}), dtmax, [=](nd_item<2>index, auto& max){
 
-                int portion = ROWS/7;
+                int portion = (ROWS)/12;
                 int start = index.get_global_id() [0] * portion;
                 int end = start + portion;
    
-                for(int i= start; i<end; i++){
-                    for(int j= 0; j<COLUMNS+2;j++){
-                        max.combine((temp_acc[i][j]-temperature_acc[i][j]));
+                for(int i= start; i <= end; i++){
+                    for(int j= 1; j <= COLUMNS;j++){
+                        max.combine(fabs( temp_acc[i][j]-temperature_acc[i][j]));
                         temperature_acc[i][j] = temp_acc[i][j];
                     }
                 }
             }); 
         });
+       
+        host_accessor buffdt_host(buffdt);
+
 
         // Imprimir valores periodicamente
         if((iteration % 100) == 0) {
